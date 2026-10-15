@@ -78,6 +78,7 @@ int main(int argc, char **argv)
 {   
     if(argc < 2) {
         fprintf(stderr, "输入参数太少\n");
+        return 0;
     }
 
     int num = atoi(argv[1]);
