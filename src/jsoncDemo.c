@@ -74,6 +74,48 @@ int Demo_3(void)
     return 0;
 }
 
+int Demo_4(void)
+{
+    struct json_object *array = json_object_new_array();
+
+    if(array == NULL) {
+        fprintf(stderr, "创建JSON数组失败\n");
+        return 1;
+    }
+
+    struct json_object *person1 = json_object_new_object();
+    if(person1 == NULL)
+        return 1;
+    json_object_object_add(person1, "name", json_object_new_string("张三"));
+    json_object_object_add(person1, "age", json_object_new_int(20));
+
+    struct json_object *person2 = json_object_new_object();
+    if(person2 == NULL)
+        return 1;
+    json_object_object_add(person2, "name", json_object_new_string("李四"));
+    json_object_object_add(person2, "age", json_object_new_int(22));
+
+    struct json_object *person3 = json_object_new_object();
+    if(person3 == NULL)
+        return 1;
+    json_object_object_add(person3, "name", json_object_new_string("王五"));
+    json_object_object_add(person3, "age", json_object_new_int(19));
+
+    json_object_array_add(array, person1);
+    json_object_array_add(array, person2);
+    json_object_array_add(array, person3);
+
+    int rc = json_object_to_file_ext("array.json", array, JSON_C_TO_STRING_PRETTY);
+
+    if(rc != 0) {
+        fprintf(stderr, "写入 JSON 文件失败\n");
+        json_object_put(array);
+        return 1;
+    }
+
+    json_object_put(array);
+}
+
 int main(int argc, char **argv)
 {   
     if(argc < 2) {
@@ -95,6 +137,10 @@ int main(int argc, char **argv)
 
     case 3:
         return Demo_3();
+        break;
+
+    case 4:
+        return Demo_4();
         break;
     
     default:
