@@ -192,6 +192,10 @@ int main(void)
     json_object_object_add(body, "model", json_object_new_string("deepseek-flash"));
     json_object_object_add(body, "messages", aichat.messages);
 
+    json_object *thinking = json_object_new_object();
+    json_object_object_add(thinking, "type", json_object_new_string("disabled"));
+    json_object_object_add(body, "thinking", thinking);
+
     while(1) {
         char *userline = Aichat_getline();
         if(userline == NULL) continue;
