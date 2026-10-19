@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <curl/curl.h>
 #include <json-c/json.h>
 
@@ -91,9 +90,9 @@ static char *Aichat_getline(void)
     if(str == NULL)
         error_exit("输入分配内存失败");
 
-    printf("输入问题:");
+    printf("user:");
 
-    while((ch = getchar()) != EOF && ch != '\n') {
+    while((ch = getchar()) != EOF && ch != '\n')  {
         if(len == capacity - 1) {
             size_t new_capacity = capacity * 2;
             char *tmp = realloc(str, new_capacity);
@@ -108,11 +107,17 @@ static char *Aichat_getline(void)
     }
     str[len] = '\0';
 
+    if(len == 0) {
+        printf("输入为空请重新输入\n\n");
+        free(str);
+        return NULL;
+    }
+
     return str;
 }
 
 // 重定向输出函数
-size_t receive (const void *data, size_t size, size_t count, void *user_data)
+static size_t receive (const void *data, size_t size, size_t count, void *user_data)
 {
     size_t bytes = size * count;
     struct AiChatResponses *buf = (struct AiChatResponses*)user_data;
@@ -125,6 +130,34 @@ size_t receive (const void *data, size_t size, size_t count, void *user_data)
     buf->length += bytes;
     buf->data[buf->length] = '\0';
     return bytes;
+}
+
+// 接收内容并转换成json并处理
+static void reponse_processing(void)
+{
+    json_object *responses = json_tokener_parse(aibuf.data);
+    if(responses == NULL || !json_object_is_type(responses, json_type_object))
+        error_exit("Response 读取或JSON解析失败");
+    
+    json_object *responses_choices = NULL;
+    if( !json_object_object_get_ex(responses, "choices", &responses_choices)
+    ||  !json_object_is_type(responses_choices, json_type_array))
+        error_exit("Response 读取 \"choices\" 失败");
+
+    json_object *responses_choices_0 = json_object_array_get_idx(responses_choices, 0);
+    json_object *responses_choices_0_message = NULL;
+    json_object *responses_choices_0_message_content = NULL;
+    char *assistant = NULL;
+    if( json_object_object_get_ex(responses_choices_0, "message", &responses_choices_0_message)
+    &&  json_object_is_type(responses_choices_0_message, json_type_object)
+    &&  json_object_object_get_ex(responses_choices_0_message, "content", &responses_choices_0_message_content)
+    &&  json_object_is_type(responses_choices_0_message_content, json_type_string))
+    {
+        printf("\ndeepseek: %s\n", json_object_get_string(responses_choices_0_message_content));
+        Aichat_message_add("assistant", json_object_get_string(responses_choices_0_message_content));
+    }
+
+    json_object_put(responses);
 }
 
 int main(void)
@@ -155,71 +188,53 @@ int main(void)
         error_exit("设置HTTP请求头失败");
     
     json_object *body = json_object_new_object();
-    Aichat_message_add("system", "你是一个乐于助人的助手");
-
-    char *userline = Aichat_getline();
-    Aichat_message_add("user", userline);
-    free(userline);
-
-    json_object_object_add(body, "messages", aichat.messages);
+    Aichat_message_add("system", "你是用户忠诚的小狗");
     json_object_object_add(body, "model", json_object_new_string("deepseek-flash"));
+    json_object_object_add(body, "messages", aichat.messages);
 
-    // 设置请求体
-    rc = curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_object_to_json_string(body));
-    if(rc != CURLE_OK)
-        error_exit("设置HTTP请求体失败");
+    while(1) {
+        char *userline = Aichat_getline();
+        if(userline == NULL) continue;
+        Aichat_message_add("user", userline);
+        free(userline);
 
-    // 重定向输出函数
-    rc = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive);
-    if(rc != CURLE_OK)
-        error_exit("设置curl输出函数失败");
+        // 设置请求体
+        rc = curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_object_to_json_string(body));
+        if(rc != CURLE_OK)
+            error_exit("设置HTTP请求体失败");
 
-    // 传入重定向输出函数参数
-    rc = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &aibuf);
-    if(rc != CURLE_OK)
-        error_exit("设置curl输出函数参数失败");
+        // 重定向输出函数
+        rc = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive);
+        if(rc != CURLE_OK)
+            error_exit("设置curl输出函数失败");
 
-    // curl发起请求
-    rc = curl_easy_perform(curl);
-    if(rc != CURLE_OK)
-        error_exit("请求失败");
+        // 传入重定向输出函数参数
+        rc = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &aibuf);
+        if(rc != CURLE_OK)
+            error_exit("设置curl输出函数参数失败");
 
-    // 根据状态码判断是否异常
-    long status = 0;
-    rc = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    if(rc == CURLE_OK) {
-        if(status < 200 || status >= 300) {
-            fprintf(stderr, "\nHTTP status: %ld\n", status);
-            return 1;
+        // curl发起请求
+        rc = curl_easy_perform(curl);
+        if(rc != CURLE_OK)
+            error_exit("请求失败");
+
+        // 根据状态码判断是否异常
+        long status = 0;
+        rc = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+        if(rc == CURLE_OK) {
+            if(status < 200 || status >= 300) {
+                fprintf(stderr, "\nHTTP status: %ld\n", status);
+                return 1;
+            }
         }
+        reponse_processing();
+        free(aibuf.data);
+        memset(&aibuf, 0, sizeof(aibuf));
     }
 
-    // 接收内容并转换成json
-    json_object *responses = json_tokener_parse(aibuf.data);
-    if(responses == NULL || !json_object_is_type(responses, json_type_object))
-        error_exit("Response 读取或JSON解析失败");
-    
-    json_object *responses_choices = NULL;
-    if( !json_object_object_get_ex(responses, "choices", &responses_choices)
-    ||  !json_object_is_type(responses_choices, json_type_array))
-        error_exit("Response 读取 \"choices\" 失败");
-
-    json_object *responses_choices_0 = json_object_array_get_idx(responses_choices, 0);
-    json_object *responses_choices_0_message = NULL;
-    json_object *responses_choices_0_message_content = NULL;
-    char *assistant = NULL;
-    if( json_object_object_get_ex(responses_choices_0, "message", &responses_choices_0_message)
-    &&  json_object_is_type(responses_choices_0_message, json_type_object)
-    &&  json_object_object_get_ex(responses_choices_0_message, "content", &responses_choices_0_message_content)
-    &&  json_object_is_type(responses_choices_0_message_content, json_type_string))
-    {
-        printf("%s\n", json_object_to_json_string_ext(responses_choices_0_message_content, JSON_C_TO_STRING_PRETTY));
-    }
-
-    
-    json_object_put(responses);
-    json_object_put(body);
+    curl_easy_cleanup(curl);
     curl_slist_free_all(aichat.headers);
+    json_object_put(body);
     curl_global_cleanup();
     return 0;
 }
