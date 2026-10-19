@@ -34,14 +34,14 @@ target_link_libraries(jsoncDemo
     PkgConfig::JSON-C
 )
 
-add_executable(deepseek)
+add_executable(aiChat)
 
-target_sources(deepseek
+target_sources(aiChat
     PRIVATE
-    src/deepseekChat.c
+    src/aiChat.c
 )
 
-target_link_libraries(deepseek
+target_link_libraries(aiChat
     PRIVATE
     PkgConfig::CURL
     PkgConfig::JSON-C
