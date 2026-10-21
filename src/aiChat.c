@@ -9,15 +9,20 @@ struct AiChatStruct {
     struct curl_slist *headers;
     json_object *messages;
 };
+static struct AiChatStruct aichat = {0};
 
-struct AiChatResponses {
+struct dataBuffer {
     char *data;
     size_t length;
 };
+static struct dataBuffer aibuf = {0};
 
-static struct AiChatStruct aichat = {0};
+struct StreamBuffer {
+    struct dataBuffer cache;
+    struct dataBuffer message;
+};
+static struct StreamBuffer streambuf = {0};
 
-static struct AiChatResponses aibuf = {0};
 
 // 错误退出
 static void error_exit(char *message)
@@ -116,11 +121,32 @@ static char *Aichat_getline(void)
     return str;
 }
 
-// 重定向输出函数
-static size_t receive (const void *data, size_t size, size_t count, void *user_data)
+static void Aichat_MessageCache(struct dataBuffer *message, const char *data, size_t len)
+{
+    static size_t capacity = 128;
+    if(message->data == NULL) {
+        capacity = 128;
+        message->data = realloc(message->data, capacity);
+        if(message->data == NULL) error_exit("Aichat_MessageCache 内存重分配失败");
+    }
+  
+    if(message->length + len + 1 > capacity) {
+        size_t needed = message->length + len + 1;
+        while(capacity < needed) capacity *= 2;
+        message->data = realloc(message->data, capacity);
+        if(message->data == NULL) error_exit("Aichat_MessageCache 内存重分配失败");
+    }
+
+    memcpy(message->data + message->length, data, len);
+    message->length += len;
+    message->data[message->length] = '\0';
+}
+
+// 重定向非流式输出函数
+static size_t nostream_receive (const void *data, size_t size, size_t count, void *user_data)
 {
     size_t bytes = size * count;
-    struct AiChatResponses *buf = (struct AiChatResponses*)user_data;
+    struct dataBuffer *buf = (struct dataBuffer*)user_data;
     char *tmp = realloc(buf->data, buf->length + bytes + 1);
     if(tmp == NULL)
         error_exit("接收字符串分配空间失败");
@@ -132,7 +158,74 @@ static size_t receive (const void *data, size_t size, size_t count, void *user_d
     return bytes;
 }
 
-// 接收内容并转换成json并处理
+static void auto_pushBuf(struct dataBuffer *buf, const char *star_addr, size_t len)
+{
+    buf->data = realloc(buf->data, buf->length + len + 1);
+    if(buf->data == NULL) error_exit("auto_pushBuf 重新分配内存失败");
+
+    memcpy(buf->data + buf->length, star_addr, len);
+    buf->length += len;
+    buf->data[buf->length] = '\0';
+}
+
+// 流式缓存处理无思考内容
+static void cache_programing(struct StreamBuffer *strbuf)
+{
+    if(strbuf->cache.length < 6) return ;
+
+    json_tokener *tok = json_tokener_new();
+    json_object *data = json_tokener_parse_ex(tok, strbuf->cache.data + 6, strbuf->cache.length - 6);
+    json_object *choices = NULL, *choice = NULL, *delta = NULL, *content = NULL;
+    if( data && json_object_object_get_ex(data, "choices", &choices) 
+    &&  json_object_is_type(choices, json_type_array)) {
+        choice = json_object_array_get_idx(choices, 0);
+
+        if( json_object_object_get_ex(choice, "delta", &delta) )
+        {
+            if( json_object_object_get_ex(delta, "role", &content)) {
+                fprintf(stdout, "deepseek: ");
+                fflush(stdout);
+            }
+            else if( json_object_object_get_ex(delta, "content", &content)
+            &&  json_object_is_type(content, json_type_string)
+            &&  json_object_get_string_len(content) > 0) {
+                const char *content_ctr = json_object_get_string(content);
+                Aichat_MessageCache(&strbuf->message, content_ctr, strlen(content_ctr));
+                fprintf(stdout, "%s", content_ctr);
+                fflush(stdout);
+            }
+        }
+    }
+
+    json_tokener_free(tok);
+    json_object_put(data);
+}
+
+// 重定向流式输出函数
+static size_t stream_receive (const char *data, size_t size, size_t count, void *user_data)
+{
+    size_t bytes = size * count, start = 0;
+    struct StreamBuffer *stmbuf = (struct StreamBuffer *)user_data;
+
+    for(size_t i = 0; i < bytes; i ++) {
+        if(data[i] != '\n') continue;
+
+        auto_pushBuf(&stmbuf->cache, data + start, i - start);
+        cache_programing(stmbuf);
+        if(stmbuf->cache.data != NULL) {
+            free(stmbuf->cache.data);
+            stmbuf->cache.data = NULL;
+            stmbuf->cache.length = 0;
+        }
+        start = i + 1;
+    }
+
+    auto_pushBuf(&stmbuf->cache, data + start, bytes - start);
+
+    return bytes;
+}
+
+// 非流式接收内容并转换成json并处理
 static void reponse_processing(void)
 {
     json_object *responses = json_tokener_parse(aibuf.data);
@@ -186,11 +279,26 @@ int main(void)
     rc = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, aichat.headers);
     if(rc != CURLE_OK)
         error_exit("设置HTTP请求头失败");
+
+    // 重定向输出函数
+    rc = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stream_receive);
+    if(rc != CURLE_OK)
+        error_exit("设置curl输出函数失败");
+
+    // 传入重定向输出函数参数
+    rc = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &streambuf);
+    if(rc != CURLE_OK)
+        error_exit("设置curl输出函数参数失败");
     
     json_object *body = json_object_new_object();
     Aichat_message_add("system", "你是用户忠诚的小狗");
     json_object_object_add(body, "model", json_object_new_string("deepseek-flash"));
     json_object_object_add(body, "messages", aichat.messages);
+    json_object_object_add(body, "stream", json_object_new_boolean(1));
+
+    json_object *thinking = json_object_new_object();
+    json_object_object_add(thinking, "type", json_object_new_string("disabled"));
+    json_object_object_add(body, "thinking", thinking);
 
     while(1) {
         char *userline = Aichat_getline();
@@ -203,20 +311,12 @@ int main(void)
         if(rc != CURLE_OK)
             error_exit("设置HTTP请求体失败");
 
-        // 重定向输出函数
-        rc = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive);
-        if(rc != CURLE_OK)
-            error_exit("设置curl输出函数失败");
-
-        // 传入重定向输出函数参数
-        rc = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &aibuf);
-        if(rc != CURLE_OK)
-            error_exit("设置curl输出函数参数失败");
-
         // curl发起请求
         rc = curl_easy_perform(curl);
         if(rc != CURLE_OK)
             error_exit("请求失败");
+
+        printf("\n");
 
         // 根据状态码判断是否异常
         long status = 0;
@@ -227,7 +327,15 @@ int main(void)
                 return 1;
             }
         }
-        reponse_processing();
+
+        Aichat_message_add("assistant", streambuf.message.data);
+        free(streambuf.message.data);
+        streambuf.message.data = NULL;
+        streambuf.message.length = 0;
+        free(streambuf.cache.data);
+        streambuf.cache.data = NULL;
+        streambuf.cache.length = 0;
+
         free(aibuf.data);
         memset(&aibuf, 0, sizeof(aibuf));
     }
