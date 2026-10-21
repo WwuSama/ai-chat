@@ -1,4 +1,4 @@
-# ai_box
+# ai_chat
 
 一个使用 C 语言、libcurl 和 json-c 的学习项目，包含 DeepSeek 命令行流式聊天、HTTP 请求示例和 JSON 操作示例。
 
@@ -11,7 +11,7 @@
 ## 目录结构
 
 ```text
-ai_box/
+ai_chat/
 ├── CMakeLists.txt
 ├── README.md
 ├── .gitignore
