@@ -171,6 +171,8 @@ static void auto_pushBuf(struct dataBuffer *buf, const char *star_addr, size_t l
 // 流式缓存处理无思考内容
 static void cache_programing(struct StreamBuffer *strbuf)
 {
+    if(strbuf->cache.length < 6) return ;
+
     json_tokener *tok = json_tokener_new();
     json_object *data = json_tokener_parse_ex(tok, strbuf->cache.data + 6, strbuf->cache.length - 6);
     json_object *choices = NULL, *choice = NULL, *delta = NULL, *content = NULL;
@@ -202,8 +204,7 @@ static void cache_programing(struct StreamBuffer *strbuf)
 // 重定向流式输出函数
 static size_t stream_receive (const char *data, size_t size, size_t count, void *user_data)
 {
-    size_t bytes = size * count;
-    size_t start = 0;
+    size_t bytes = size * count, start = 0;
     struct StreamBuffer *stmbuf = (struct StreamBuffer *)user_data;
 
     for(size_t i = 0; i < bytes; i ++) {
@@ -278,6 +279,16 @@ int main(void)
     rc = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, aichat.headers);
     if(rc != CURLE_OK)
         error_exit("设置HTTP请求头失败");
+
+    // 重定向输出函数
+    rc = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stream_receive);
+    if(rc != CURLE_OK)
+        error_exit("设置curl输出函数失败");
+
+    // 传入重定向输出函数参数
+    rc = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &streambuf);
+    if(rc != CURLE_OK)
+        error_exit("设置curl输出函数参数失败");
     
     json_object *body = json_object_new_object();
     Aichat_message_add("system", "你是用户忠诚的小狗");
@@ -299,16 +310,6 @@ int main(void)
         rc = curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_object_to_json_string(body));
         if(rc != CURLE_OK)
             error_exit("设置HTTP请求体失败");
-
-        // 重定向输出函数
-        rc = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stream_receive);
-        if(rc != CURLE_OK)
-            error_exit("设置curl输出函数失败");
-
-        // 传入重定向输出函数参数
-        rc = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &streambuf);
-        if(rc != CURLE_OK)
-            error_exit("设置curl输出函数参数失败");
 
         // curl发起请求
         rc = curl_easy_perform(curl);
