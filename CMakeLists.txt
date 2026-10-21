@@ -46,6 +46,3 @@ target_link_libraries(aiChat
     PkgConfig::CURL
     PkgConfig::JSON-C
 )
-
-add_executable(aiChatStream src/aiChatStream.c)
-target_link_libraries(aiChatStream PRIVATE PkgConfig::CURL PkgConfig::JSON-C)
